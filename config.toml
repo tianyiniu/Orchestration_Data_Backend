@@ -1,0 +1,38 @@
+[corpus]
+dataset_build_dir = "/nas-ssd2/tianyin4/DataDump"
+download_bcp = true
+download_wiki = true
+lead_jsonl = "leads.jsonl"
+documents_db = "documents.sqlite"
+lead_chars = 1000
+
+[model]
+name = "microsoft/harrier-oss-v1-0.6b"
+cache_dir = "/nas-ssd2/tianyin4/cache/huggingface"
+max_length = 1024
+batch_size = 1024
+dtype = "float16"
+
+[build]
+shard_dir = "indexes/harrier-oss-v1-0.6b"
+log_dir = "logs"
+cuda_devices = [4, 5, 6, 7]
+progress_interval = 5.0
+stream_logs = false
+
+[server]
+host = "0.0.0.0"
+client_host = "localhost"
+port = 8000
+threaded = true
+debug = false
+default_top_n = 10
+max_top_n = 50
+max_query_length = 512
+
+[test_server]
+base_url = ""
+query_top_n = 3
+timeout_seconds = 60
+sample_query = "ordinary differential equations"
+sample_url = "https://en.wikipedia.org/wiki/List%20of%20parks%20in%20New%20York%20City"
