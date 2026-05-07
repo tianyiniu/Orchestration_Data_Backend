@@ -26,6 +26,7 @@ client_host = "localhost"
 port = 8000
 threaded = true
 debug = false
+cuda_devices = [4]
 default_top_n = 10
 max_top_n = 50
 max_query_length = 512

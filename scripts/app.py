@@ -1,10 +1,10 @@
 """
-Flask backend for query search and URL document lookup.
+Flask backend for semantic query search and exact URL document lookup.
 
-The dataset downloader owns `leads.jsonl` and `documents.sqlite`; the corpus
-builder owns embedding shards. This server loads those configured artifacts
-and exposes two primary endpoints:
+Runtime configuration is read from the repository-level "config.toml". The server uses "[corpus]" paths for "leads.jsonl" and "documents.sqlite", "[build]" paths for FAISS-compatible embedding shards, "[model]" settings for the Harrier query encoder, and "[server]" settings for bind address, result limits, and CUDA visibility."[server].cuda_devices" is applied by setting "CUDA_VISIBLE_DEVICES" before the Harrier encoder is imported or initialized.
 
+Exposed endpoints:
+    GET  /healthz         report server readiness and loaded corpus paths
     POST /query_search    body: {"query": str, "n": int}
     POST /url_search      body: {"url": str}
 """
@@ -35,6 +35,15 @@ def repo_root() -> str:
 def load_config() -> dict:
     with open(os.path.join(repo_root(), "config.toml"), "rb") as f:
         return tomllib.load(f)
+
+
+def apply_cuda_visibility(config: dict) -> None:
+    cuda_devices = config.get("server", {}).get("cuda_devices")
+    if cuda_devices is None:
+        return
+    if isinstance(cuda_devices, (str, int)):
+        cuda_devices = [cuda_devices]
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(device) for device in cuda_devices)
 
 
 def corpus_path(config: dict, key: str, default: str) -> str:
@@ -219,11 +228,14 @@ def create_app(store: SearchStore) -> Flask:
 
 
 def build_app() -> Flask:
-    return create_app(SearchStore(load_config()))
+    config = load_config()
+    apply_cuda_visibility(config)
+    return create_app(SearchStore(config))
 
 
 def main() -> None:
     config = load_config()
+    apply_cuda_visibility(config)
     server_config = config.get("server", {})
     app = create_app(SearchStore(config))
     app.run(

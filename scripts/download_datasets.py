@@ -1,6 +1,11 @@
 """
-Download the BrowseComp-Plus corpus to local storage. Download the English Wikipedia parquet shards from `wikimedia/wikipedia` (default config: 20231101.en) to local storage.
+Materialize configured source datasets into the local retrieval corpus.
+
+Runtime configuration is read from the repository-level "config.toml". The "[corpus]" section controls the output directory, whether BrowseComp-Plus and/or English Wikipedia are downloaded, the combined lead JSONL path, and how many characters from each document are retained for retrieval leads.
+
+This script writes two server/build inputs under "[corpus].dataset_build_dir": the combined "leads.jsonl" file used by "build_corpus.py" for embedding, and the "documents.sqlite" store used by "app.py" for exact URL lookups. Relative corpus paths are resolved under "dataset_build_dir". BrowseComp-Plus is loaded from "Tevatron/browsecomp-plus-corpus", filtered with a lightweight English heuristic, and assigned generated article URLs. Wikipedia is downloaded from "wikimedia/wikipedia" using the "20231101.en" parquet shards.
 """
+
 import os
 import re
 import sys

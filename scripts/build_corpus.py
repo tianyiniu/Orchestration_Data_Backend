@@ -1,9 +1,7 @@
 """
-Encode cached corpus leads with Harrier OSS v1 0.6B.
+Encode cached corpus leads into FAISS-compatible embedding shards.
 
-`download_datasets.py` owns corpus materialization: it writes the combined
-leads JSONL and the full-text SQLite document store. This script only reads
-the configured leads file and writes embedding shards for retrieval.
+Runtime configuration is read from the repository-level "config.toml". This script reads "[corpus].lead_jsonl" under "[corpus].dataset_build_dir", uses "[model]" settings for the Harrier encoder, and writes shard/log outputs under the configured "[build]" paths. "[build].cuda_devices" controls CUDA device assignment. The parent process starts one worker per configured device, assigns each worker a single "CUDA_VISIBLE_DEVICES" value, and coordinates work with the internal "ENCODE_RANK" and "ENCODE_WORLD_SIZE" environment variables. If no CUDA devices are configured, the script falls back to the visible CUDA device count, or one CPU-visible worker when CUDA is unavailable. "download_datasets.py" is responsible for downloading actual data, this file only reads the downloaded data files and writes/caches "corpus.<rank>.pkl" shards for retrieval.
 """
 
 import glob

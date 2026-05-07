@@ -296,7 +296,7 @@ Response:
 }
 ```
 
-## Smoke Test
+## Testing
 
 `scripts/test_server.py` reads `[test_server]` from `config.toml`:
 
@@ -329,14 +329,6 @@ The Flask development server uses:
 [server]
 threaded = true
 debug = false
-```
-
-That is sufficient for local testing and light internal use. For a long-running
-shared server, prefer one Gunicorn worker with multiple threads to avoid
-duplicating the Harrier model and FAISS index in memory:
-
-```bash
-gunicorn -w 1 --threads 10 --timeout 120 -b 0.0.0.0:8000 "scripts.app:build_app()"
 ```
 
 ## Storage Notes

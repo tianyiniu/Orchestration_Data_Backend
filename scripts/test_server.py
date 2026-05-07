@@ -1,8 +1,9 @@
 """
-Smoke-test client for the Flask retrieval server.
+Test client for the Flask retrieval server.
 
-Settings come from config.toml. If sample_query or sample_url is omitted, the
-client skips that endpoint.
+Runtime configuration is read from the repository-level "config.toml". The client uses "[test_server].base_url" when provided; otherwise it builds the URL from "[server].client_host" and "[server].port". Request timeout, query result count, sample query, and sample URL all come from "[test_server]", with "query_top_n" falling back to "[server].default_top_n".
+
+The client always checks "GET /healthz" first. It then exercises "POST /query_search" only when "sample_query" is configured, and "POST /url_search" only when "sample_url" is configured. CUDA settings are owned by the running server process, not by this client.
 """
 
 import os
