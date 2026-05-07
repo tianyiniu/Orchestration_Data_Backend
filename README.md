@@ -136,7 +136,7 @@ python scripts/build_corpus.py
 # 3. Start the Flask server.
 python scripts/app.py
 
-# 4. Optional smoke test using [test_server] settings in config.toml.
+# 4. (Optional) interactive loop to test server using [test_server] settings in config.toml.
 python scripts/test_server.py
 ```
 
@@ -305,8 +305,8 @@ Response:
 base_url = ""
 query_top_n = 5
 timeout_seconds = 60
-sample_query = ""
-sample_url = ""
+default_query = ""
+default_url = ""
 ```
 
 If `base_url` is empty, it uses:
@@ -315,11 +315,14 @@ If `base_url` is empty, it uses:
 http://{server.client_host}:{server.port}
 ```
 
-Set `sample_query` and/or `sample_url`, then run:
+Set `default_query` and/or `default_url`, then run:
 
 ```bash
 python scripts/test_server.py
 ```
+
+The client checks `/healthz`, then starts an interactive prompt. Use `query`
+or `url`; pressing Enter at the value prompt accepts the configured default.
 
 ## Serving Notes
 

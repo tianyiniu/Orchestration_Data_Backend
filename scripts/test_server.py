@@ -1,9 +1,11 @@
 """
 Test client for the Flask retrieval server.
 
-Runtime configuration is read from the repository-level "config.toml". The client uses "[test_server].base_url" when provided; otherwise it builds the URL from "[server].client_host" and "[server].port". Request timeout, query result count, sample query, and sample URL all come from "[test_server]", with "query_top_n" falling back to "[server].default_top_n".
+Runtime configuration is read from the repository-level "config.toml". The client uses "[test_server].base_url" when provided; otherwise it builds the URL from "[server].client_host" and "[server].port". Request timeout, query result count, default query, and default URL all come from "[test_server]", with "query_top_n" falling back to "[server].default_top_n".
 
-The client always checks "GET /healthz" first. It then exercises "POST /query_search" only when "sample_query" is configured, and "POST /url_search" only when "sample_url" is configured. CUDA settings are owned by the running server process, not by this client.
+The client always checks "GET /healthz" first. It then starts an interactive
+loop for "POST /query_search" and "POST /url_search". CUDA settings are owned
+by the running server process, not by this client.
 """
 
 import os
@@ -73,6 +75,56 @@ def url_search(base: str, url: str, timeout: float) -> None:
     print(f"    text: {shorten(doc['text'].replace(chr(10), ' '), 360)}")
 
 
+def config_default(test_config: dict, key: str, legacy_key: str) -> str:
+    value = test_config.get(key)
+    if value is None:
+        value = test_config.get(legacy_key, "")
+    return str(value or "")
+
+
+def prompt_value(label: str, default: str) -> str:
+    suffix = f" [{default}]" if default else ""
+    value = input(f"{label}{suffix}: ").strip()
+    return value or default
+
+
+def interactive_loop(
+    base: str,
+    timeout: float,
+    n: int,
+    default_query: str,
+    default_url: str,
+) -> None:
+    print("\nCommands: query, url, health, quit")
+    while True:
+        try:
+            command = input("\ntest_server> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+
+        if command in {"q", "query"}:
+            query = prompt_value("query", default_query)
+            if query:
+                query_search(base, query, n, timeout)
+            else:
+                print("No query entered.")
+        elif command in {"u", "url"}:
+            url = prompt_value("url", default_url)
+            if url:
+                url_search(base, url, timeout)
+            else:
+                print("No URL entered.")
+        elif command in {"h", "health"}:
+            health(base, timeout)
+        elif command in {"x", "exit", "quit"}:
+            return
+        elif command == "":
+            print("Commands: query, url, health, quit")
+        else:
+            print(f"Unknown command: {command}")
+
+
 def main() -> None:
     config = load_config()
     test_config = config.get("test_server", {})
@@ -86,16 +138,9 @@ def main() -> None:
         print(f"server not reachable at {base}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    sample_query = test_config.get("sample_query")
-    if sample_query:
-        query_search(base, sample_query, n, timeout)
-
-    sample_url = test_config.get("sample_url")
-    if sample_url:
-        url_search(base, sample_url, timeout)
-
-    if not sample_query and not sample_url:
-        print("No sample_query or sample_url configured in [test_server].")
+    default_query = config_default(test_config, "default_query", "sample_query")
+    default_url = config_default(test_config, "default_url", "sample_url")
+    interactive_loop(base, timeout, n, default_query, default_url)
 
 
 if __name__ == "__main__":

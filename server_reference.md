@@ -146,5 +146,5 @@ There is also a test client:
 python scripts/test_server.py
 ```
 
-It reads `[test_server]` settings from `config.toml` and exercises `/healthz`,
-`/query_search`, and `/url_search`.
+It reads `[test_server]` settings from `config.toml`, checks `/healthz`, and
+starts an interactive prompt for `/query_search` and `/url_search`.
