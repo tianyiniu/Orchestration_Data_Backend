@@ -7,6 +7,9 @@ Exposed endpoints:
     GET  /healthz         report server readiness and loaded corpus paths
     POST /query_search    body: {"query": str, "n": int}
     POST /url_search      body: {"url": str}
+
+NOTE: THIS SERVER WILL LIKELY TAKE >2 MIN TO START. 
+Terminal output will hang after finishing loading model weights
 """
 
 from __future__ import annotations
