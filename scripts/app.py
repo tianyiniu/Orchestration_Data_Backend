@@ -43,6 +43,8 @@ from flask import Flask, jsonify, request
 
 DEFAULT_MODEL = "microsoft/harrier-oss-v1-0.6b"
 
+_STARTUP_T0 = time.monotonic()
+
 
 def repo_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -383,12 +385,19 @@ def _make_scheduler(config: dict, store: SearchStore) -> BatchScheduler:
     )
 
 
+def _announce_ready() -> None:
+    elapsed = time.monotonic() - _STARTUP_T0
+    print(f"Server started, setup took {elapsed:.1f} seconds", flush=True)
+
+
 def build_app() -> Flask:
     config = load_config()
     apply_cuda_visibility(config)
     store = SearchStore(config)
     scheduler = _make_scheduler(config, store)
-    return create_app(store, scheduler)
+    app = create_app(store, scheduler)
+    _announce_ready()
+    return app
 
 
 def main() -> None:
@@ -398,6 +407,7 @@ def main() -> None:
     store = SearchStore(config)
     scheduler = _make_scheduler(config, store)
     app = create_app(store, scheduler)
+    _announce_ready()
     app.run(
         host=server_config.get("host", "0.0.0.0"),
         port=int(server_config.get("port", 8000)),
