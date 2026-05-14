@@ -60,7 +60,7 @@ def query_search(base: str, query: str, n: int, timeout: float) -> None:
             f"{hit['id']} ({hit['source']}) {hit['title']}"
         )
         print(f"      url: {hit['url']}")
-        print(f"  snippet: {shorten(hit['snippet'].replace(chr(10), ' '), 220)}")
+        # print(f"  snippet: {shorten(hit['snippet'].replace(chr(10), ' '), 220)}")
 
 
 def url_search(base: str, url: str, timeout: float) -> None:

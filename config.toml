@@ -23,17 +23,20 @@ stream_logs = false
 [server]
 host = "0.0.0.0"
 client_host = "localhost"
-port = 8000
+port = 7470
 threaded = true
 debug = false
-cuda_devices = [0]
+cuda_devices = [4]
 default_top_n = 10
 max_top_n = 50
 max_query_length = 512
+faiss_gpu = true
+batch_max_size = 32
+batch_max_wait_ms = 20.0
 
 [test_server]
 base_url = ""
-query_top_n = 3
+query_top_n = 10
 timeout_seconds = 60
 default_query = "ordinary differential equations"
 default_url = "https://en.wikipedia.org/wiki/List%20of%20parks%20in%20New%20York%20City"

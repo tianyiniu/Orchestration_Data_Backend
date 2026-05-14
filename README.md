@@ -243,6 +243,11 @@ Start the server:
 python scripts/app.py
 ```
 
+or using `gunicorn`
+```bash
+gunicorn -w 1 --threads 32 --timeout 600 -b 0.0.0.0:7470 'scripts.app:build_app()'
+``` 
+
 Health:
 
 ```bash

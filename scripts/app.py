@@ -1,15 +1,25 @@
 """
 Flask backend for semantic query search and exact URL document lookup.
 
-Runtime configuration is read from the repository-level "config.toml". The server uses "[corpus]" paths for "leads.jsonl" and "documents.sqlite", "[build]" paths for FAISS-compatible embedding shards, "[model]" settings for the Harrier query encoder, and "[server]" settings for bind address, result limits, and CUDA visibility."[server].cuda_devices" is applied by setting "CUDA_VISIBLE_DEVICES" before the Harrier encoder is imported or initialized.
+Runtime configuration is read from the repository-level "config.toml". The server uses "[corpus]" paths for "leads.jsonl" and "documents.sqlite", "[build]" paths for FAISS-compatible embedding shards, "[model]" settings for the Harrier query encoder, and "[server]" settings for bind address, result limits, and CUDA visibility. "[server].cuda_devices" is applied by setting "CUDA_VISIBLE_DEVICES" before the Harrier encoder is imported or initialized.
+
+Concurrent /query_search calls are merged server-side by a BatchScheduler:
+a single background thread owns the encoder and the FAISS index, draining up
+to "[server].batch_max_size" pending requests within "[server].batch_max_wait_ms"
+and serving them with one GPU encode and one FAISS search. The FAISS index is
+moved to GPU when "[server].faiss_gpu" is true (default) and faiss-gpu is
+available; otherwise it stays on CPU.
 
 Exposed endpoints:
     GET  /healthz         report server readiness and loaded corpus paths
     POST /query_search    body: {"query": str, "n": int}
     POST /url_search      body: {"url": str}
 
-NOTE: THIS SERVER WILL LIKELY TAKE >2 MIN TO START. 
-Terminal output will hang after finishing loading model weights
+NOTE: THIS SERVER WILL LIKELY TAKE >2 MIN TO START.
+Terminal output will hang after finishing loading model weights.
+
+For real load, prefer Gunicorn over app.run:
+    gunicorn -w 1 --threads 32 --timeout 600 -b 0.0.0.0:7470 'scripts.app:build_app()'
 """
 
 from __future__ import annotations
@@ -18,8 +28,11 @@ import glob
 import json
 import os
 import pickle
+import queue
 import sqlite3
 import sys
+import threading
+import time
 import tomllib
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -89,6 +102,7 @@ class SearchStore:
         self.default_top_n = int(server_config.get("default_top_n", 10))
         self.max_top_n = int(server_config.get("max_top_n", 50))
         self.max_query_length = int(server_config.get("max_query_length", 512))
+        self.faiss_gpu = bool(server_config.get("faiss_gpu", True))
 
         sys.path.insert(0, repo_root())
         from retrievers.encoder import HarrierEncoder
@@ -131,8 +145,26 @@ class SearchStore:
             self.index_ids.extend(ids)
 
         reps = np.vstack(all_reps)
-        self.index = faiss.IndexFlatIP(reps.shape[1])
-        self.index.add(reps)
+        cpu_index = faiss.IndexFlatIP(reps.shape[1])
+        cpu_index.add(reps)
+        self.index = self._maybe_to_gpu(cpu_index)
+
+    def _maybe_to_gpu(self, cpu_index: faiss.Index) -> faiss.Index:
+        if not self.faiss_gpu:
+            self.index_device = "cpu"
+            return cpu_index
+        if not hasattr(faiss, "StandardGpuResources") or faiss.get_num_gpus() == 0:
+            print(
+                "[warn] faiss_gpu=true in config but faiss-gpu is not available; "
+                "falling back to CPU index. Install faiss-gpu-cu12 to enable.",
+                file=sys.stderr,
+            )
+            self.index_device = "cpu"
+            return cpu_index
+        self._gpu_resources = faiss.StandardGpuResources()
+        gpu_index = faiss.index_cpu_to_gpu(self._gpu_resources, 0, cpu_index)
+        self.index_device = "gpu:0"
+        return gpu_index
 
     def _validate(self) -> None:
         missing = [doc_id for doc_id in self.index_ids[:64] if doc_id not in self.leads]
@@ -185,8 +217,117 @@ class SearchStore:
             return None
         return dict(row)
 
+    def search_batch(self, queries: List[str], top_ns: List[int]) -> List[List[dict]]:
+        assert len(queries) == len(top_ns)
+        clamped = [max(1, min(int(n), self.max_top_n)) for n in top_ns]
+        max_n = max(clamped)
 
-def create_app(store: SearchStore) -> Flask:
+        embs = self.encoder.encode_queries(queries)
+        scores, indices = self.index.search(embs, max_n)
+
+        results: List[List[dict]] = []
+        for i, n in enumerate(clamped):
+            hits = []
+            for score, idx in zip(scores[i][:n], indices[i][:n]):
+                if idx < 0:
+                    continue
+                lead = self.leads[self.index_ids[idx]]
+                hits.append(
+                    {
+                        "id": lead.id,
+                        "source": lead.source,
+                        "docid": lead.docid,
+                        "title": lead.title,
+                        "url": lead.url,
+                        "snippet": lead.snippet,
+                        "score": float(score),
+                    }
+                )
+            results.append(hits)
+        return results
+
+
+@dataclass
+class _PendingRequest:
+    query: str
+    n: int
+    event: threading.Event
+    result: Optional[List[dict]] = None
+    error: Optional[BaseException] = None
+
+
+class BatchScheduler:
+    """
+    Collect concurrent /query_search calls into one GPU encode + one FAISS
+    search. A single background thread owns the model and the index, so
+    request handler threads never contend on them.
+    """
+
+    def __init__(
+        self,
+        store: SearchStore,
+        max_batch_size: int = 32,
+        max_wait_ms: float = 10.0,
+    ):
+        self.store = store
+        self.max_batch_size = int(max_batch_size)
+        self.max_wait_s = float(max_wait_ms) / 1000.0
+        self._queue: "queue.Queue[_PendingRequest]" = queue.Queue()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="batch-scheduler", daemon=True
+        )
+        self._thread.start()
+
+    def submit(self, query: str, n: Optional[int]) -> List[dict]:
+        req_n = self.store.default_top_n if n is None else int(n)
+        req = _PendingRequest(query=query, n=req_n, event=threading.Event())
+        self._queue.put(req)
+        req.event.wait()
+        if req.error is not None:
+            raise req.error
+        return req.result or []
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _drain_batch(self) -> List[_PendingRequest]:
+        try:
+            first = self._queue.get(timeout=0.1)
+        except queue.Empty:
+            return []
+        batch = [first]
+        deadline = time.monotonic() + self.max_wait_s
+        while len(batch) < self.max_batch_size:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                batch.append(self._queue.get(timeout=remaining))
+            except queue.Empty:
+                break
+        return batch
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            batch = self._drain_batch()
+            if not batch:
+                continue
+            try:
+                results = self.store.search_batch(
+                    [r.query for r in batch],
+                    [r.n for r in batch],
+                )
+                for req, hits in zip(batch, results):
+                    req.result = hits
+                    req.event.set()
+            except BaseException as e:
+                for req in batch:
+                    req.error = e
+                    req.event.set()
+
+
+def create_app(store: SearchStore, scheduler: BatchScheduler) -> Flask:
     app = Flask(__name__)
     app.config["JSON_SORT_KEYS"] = False
 
@@ -198,6 +339,9 @@ def create_app(store: SearchStore) -> Flask:
                 "n_docs": len(store.index_ids),
                 "lead_jsonl": store.lead_jsonl,
                 "documents_db": store.db_path,
+                "index_device": getattr(store, "index_device", "cpu"),
+                "batch_max_size": scheduler.max_batch_size,
+                "batch_max_wait_ms": scheduler.max_wait_s * 1000.0,
             }
         )
 
@@ -212,7 +356,7 @@ def create_app(store: SearchStore) -> Flask:
         except (TypeError, ValueError):
             return jsonify({"error": "missing or invalid 'n'"}), 400
 
-        hits = store.search(query, n=n)
+        hits = scheduler.submit(query, n)
         return jsonify({"hits": hits})
 
     @app.post("/url_search")
@@ -230,17 +374,30 @@ def create_app(store: SearchStore) -> Flask:
     return app
 
 
+def _make_scheduler(config: dict, store: SearchStore) -> BatchScheduler:
+    server_config = config.get("server", {})
+    return BatchScheduler(
+        store=store,
+        max_batch_size=int(server_config.get("batch_max_size", 32)),
+        max_wait_ms=float(server_config.get("batch_max_wait_ms", 10.0)),
+    )
+
+
 def build_app() -> Flask:
     config = load_config()
     apply_cuda_visibility(config)
-    return create_app(SearchStore(config))
+    store = SearchStore(config)
+    scheduler = _make_scheduler(config, store)
+    return create_app(store, scheduler)
 
 
 def main() -> None:
     config = load_config()
     apply_cuda_visibility(config)
     server_config = config.get("server", {})
-    app = create_app(SearchStore(config))
+    store = SearchStore(config)
+    scheduler = _make_scheduler(config, store)
+    app = create_app(store, scheduler)
     app.run(
         host=server_config.get("host", "0.0.0.0"),
         port=int(server_config.get("port", 8000)),

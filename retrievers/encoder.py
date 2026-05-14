@@ -69,5 +69,8 @@ class HarrierEncoder:
     def encode_query(self, query: str) -> np.ndarray:
         return self._embed([format_query(query)])
 
+    def encode_queries(self, queries: List[str]) -> np.ndarray:
+        return self._embed([format_query(q) for q in queries])
+
     def encode_passages(self, texts: List[str]) -> np.ndarray:
         return self._embed(texts)

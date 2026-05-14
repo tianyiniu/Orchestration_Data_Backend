@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import faiss; print\\('version:', faiss.__version__\\); print\\('has GPU:', hasattr\\(faiss, 'StandardGpuResources'\\)\\); print\\('num GPUs:', faiss.get_num_gpus\\(\\) if hasattr\\(faiss, 'get_num_gpus'\\) else 'n/a'\\)\")",
+      "Bash(pip show *)",
+      "Bash(python -m pip show faiss-cpu faiss-gpu faiss faiss-gpu-cu12)",
+      "Bash(python -c \"import faiss, os; print\\(faiss.__file__\\)\")",
+      "Read(//nas-ssd2/tianyin4/cache/venvs/main/lib/**)",
+      "Bash(python -c ' *)",
+      "Bash(nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv)"
+    ]
+  }
+}
