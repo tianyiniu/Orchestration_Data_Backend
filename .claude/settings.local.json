@@ -7,7 +7,9 @@
       "Bash(python -c \"import faiss, os; print\\(faiss.__file__\\)\")",
       "Read(//nas-ssd2/tianyin4/cache/venvs/main/lib/**)",
       "Bash(python -c ' *)",
-      "Bash(nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv)"
+      "Bash(nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('scripts/download_datasets.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('retrievers/encoder.py'\\).read\\(\\)\\); ast.parse\\(open\\('config.toml'\\).__class__ and open\\('scripts/build_corpus.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ]
   }
 }

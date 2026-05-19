@@ -51,6 +51,8 @@ class HarrierEncoder:
             .to(self.device)
             .eval()
         )
+        if self.device.startswith("cuda"):
+            self.model = torch.compile(self.model, dynamic=True)
 
     @torch.no_grad()
     def _embed(self, texts: List[str]) -> np.ndarray:

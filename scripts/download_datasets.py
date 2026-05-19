@@ -3,7 +3,7 @@ Materialize configured source datasets into the local retrieval corpus.
 
 Runtime configuration is read from the repository-level "config.toml". The "[corpus]" section controls the output directory, whether BrowseComp-Plus and/or English Wikipedia are downloaded, the combined lead JSONL path, and how many characters from each document are retained for retrieval leads.
 
-This script writes two server/build inputs under "[corpus].dataset_build_dir": the combined "leads.jsonl" file used by "build_corpus.py" for embedding, and the "documents.sqlite" store used by "app.py" for exact URL lookups. Relative corpus paths are resolved under "dataset_build_dir". BrowseComp-Plus is loaded from "Tevatron/browsecomp-plus-corpus", filtered with a lightweight English heuristic, and assigned generated article URLs. Wikipedia is downloaded from "wikimedia/wikipedia" using the "20231101.en" parquet shards.
+This script writes two server/build inputs under "[corpus].dataset_build_dir": the combined "leads.jsonl" file used by "build_corpus.py" for embedding, and the "documents.sqlite" store used by "app.py" for exact URL lookups. Relative corpus paths are resolved under "dataset_build_dir". BrowseComp-Plus is loaded from "Tevatron/browsecomp-plus-corpus", filtered with a lightweight English heuristic, and assigned generated article URLs. Wikipedia is downloaded from "HuggingFaceFW/finewiki" using the English parquet shards under "data/enwiki/"; per-article infoboxes are rendered and prepended to both the indexed lead snippet and the stored full text.
 """
 
 import os
@@ -66,6 +66,36 @@ def make_filename(name: str, max_chars: int = 180) -> str:
     name = re.sub(r"[^\w.-]+", "_", name)
     name = name.strip("._")
     return name[:max_chars] or "untitled"
+
+
+def render_infoboxes(raw: str) -> str:
+    if not raw:
+        return ""
+    try:
+        boxes = json.loads(raw)
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(boxes, list):
+        return ""
+
+    blocks = []
+    for box in boxes:
+        if not isinstance(box, dict):
+            continue
+        lines = []
+        title = box.get("title")
+        if title:
+            lines.append(str(title))
+        data = box.get("data")
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if value is None or value == "":
+                    continue
+                key_str = str(key).replace("_", " ").strip()
+                lines.append(f"{key_str}: {value}")
+        if lines:
+            blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def init_documents_db(db_path: str):
@@ -151,21 +181,20 @@ def download_bcp(config):
 def download_wikipedia(config):
     dataset_build_dir = config["corpus"]["dataset_build_dir"]
     num_lead_chars = config["corpus"]["lead_chars"]
-    dataset = "wikimedia/wikipedia"
-    config_name = "20231101.en"
+    dataset = "HuggingFaceFW/finewiki"
     source_name = "wiki"
     lead_path = lead_jsonl_path(config)
     db_path = os.path.join(dataset_build_dir, "documents.sqlite")
-    output_dir = os.path.join(dataset_build_dir, "wikipedia/raw")
+    output_dir = os.path.join(dataset_build_dir, "finewiki/raw")
 
     os.makedirs(output_dir, exist_ok=True)
     snapshot_download(
         repo_id=dataset,
         repo_type="dataset",
-        allow_patterns=[f"{config_name}/*.parquet"],
+        allow_patterns=["data/enwiki/*.parquet"],
         local_dir=output_dir,
     )
-    print(f"Downloaded {config_name} parquet shards -> {output_dir}")
+    print(f"Downloaded FineWiki enwiki parquet shards -> {output_dir}")
 
     conn = init_documents_db(db_path)
     shards = sorted(glob.glob(os.path.join(output_dir, "**/*.parquet"), recursive=True))
@@ -175,24 +204,39 @@ def download_wikipedia(config):
     idx = 0
     with open(lead_path, "a") as f:
         for shard in tqdm(shards, desc="Writing Wikipedia shards"):
-            table = pq.read_table(shard, columns=["id", "url", "title", "text"])
-            ids = table.column("id").to_pylist()
+            table = pq.read_table(
+                shard,
+                columns=["page_id", "url", "title", "text", "infoboxes"],
+            )
+            page_ids = table.column("page_id").to_pylist()
             urls = table.column("url").to_pylist()
             titles = table.column("title").to_pylist()
             texts = table.column("text").to_pylist()
+            infoboxes = table.column("infoboxes").to_pylist()
 
-            for docid, url, title, text in zip(ids, urls, titles, texts):
+            for page_id, url, title, text, infobox_raw in zip(
+                page_ids, urls, titles, texts, infoboxes
+            ):
                 if not text:
                     continue
 
+                docid = str(page_id)
                 article_id = f"{source_name}+{idx}"
+                infobox_block = render_infoboxes(infobox_raw)
+
+                full_text = (
+                    f"{infobox_block}\n\n{text}" if infobox_block else text
+                )
+                lead_body = full_text[:num_lead_chars]
+                lead_text = f"{title}\n\n{lead_body}"
+
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO documents
                     (source, docid, id, url, title, text)
                     VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (source_name, docid, article_id, url, title, text),
+                    (source_name, docid, article_id, url, title, full_text),
                 )
 
                 f.write(
@@ -202,7 +246,7 @@ def download_wikipedia(config):
                         "source": source_name,
                         "url": url,
                         "title": title,
-                        "text": f"{title}\n\n{text[:num_lead_chars]}"}, ensure_ascii=False)
+                        "text": lead_text}, ensure_ascii=False)
                     + "\n"
                 )
                 idx += 1
